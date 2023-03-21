@@ -2,7 +2,7 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
 const port = process.env.PORT || 5000;
@@ -20,9 +20,9 @@ const client = new MongoClient(uri, {
 });
 
 function verifyJWT(req, res, next) {
-  console.log("token inside verifyJWT", req.headers.authorization);
+  // console.log("token inside verifyJWT", req.headers.authorization);
   const authHeader = req.headers.authorization;
-  console.log(authHeader);
+  // console.log(authHeader);
   if (!authHeader) {
     return res.status(401).send("unauthorized access");
   }
@@ -179,6 +179,31 @@ async function run() {
       res.send(result);
       // console.log(result);
     });
+
+    app.put("/users/admin/:id", verifyJWT, async (req, res) => {
+      const decodedEmail = req.decoded.email;
+      const query = { email: decodedEmail };
+      const user = await usersCollection.findOne(query);
+
+      if (user?.role !== "admin") {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const options = { upsert: true };
+      const updateDoc = {
+        $set: {
+          role: "admin",
+        },
+      };
+      const result = await usersCollection.updateOne(
+        filter,
+        updateDoc,
+        options
+      );
+      res.send(result);
+    });
   } finally {
   }
 }
@@ -187,6 +212,3 @@ run().catch(console.dir);
 app.listen(port, () => {
   console.log(`doctors portal server running on port ${port}`);
 });
-
-//ACCESS_TOKEN=67b16da9e120a3c388709bc5bafe8ca09adde2cdc7dda3a8ee07af07c5af55d5d0faba907614da7ed38a2cf036890a87363ed8c6702f049d9daba607f6444f98
-//
