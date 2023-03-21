@@ -1,6 +1,7 @@
 const express = require("express");
 const app = express();
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion } = require("mongodb");
 require("dotenv").config();
 
@@ -18,6 +19,24 @@ const client = new MongoClient(uri, {
   serverApi: ServerApiVersion.v1,
 });
 
+function verifyJWT(req, res, next) {
+  console.log("token inside verifyJWT", req.headers.authorization);
+  const authHeader = req.headers.authorization;
+  console.log(authHeader);
+  if (!authHeader) {
+    return res.status(401).send("unauthorized access");
+  }
+  const token = authHeader.split(" ")[1];
+
+  jwt.verify(token, process.env.ACCESS_TOKEN, function (err, decoded) {
+    if (err) {
+      return res.status(403).send({ message: "forbidden access" });
+    }
+    req.decoded = decoded;
+    next();
+  });
+}
+
 async function run() {
   try {
     const appointmentOptionCollection = client
@@ -27,6 +46,8 @@ async function run() {
     const bookingsCollection = client
       .db("doctorsPortal")
       .collection("bookings");
+
+    const usersCollection = client.db("doctorsPortal").collection("users");
 
     app.get("/appointment", async (req, res) => {
       const date = req.query.date;
@@ -48,8 +69,71 @@ async function run() {
         );
         option.slots = remainingSlots;
       });
-
       res.send(options);
+    });
+
+    // aggregate pipeline
+    app.get("/v2/appointmentOptions", async (req, res) => {
+      const date = req.query.date;
+      const options = await appointmentOptionCollection
+        .aggregate([
+          {
+            $lookup: {
+              from: "bookings",
+              localField: "name",
+              foreignField: "treatment",
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $eq: ["$appointmentDate", date],
+                    },
+                  },
+                },
+              ],
+              as: "booked",
+            },
+          },
+          {
+            $project: {
+              name: 1,
+              slots: 1,
+              booked: {
+                $map: {
+                  input: "$booked",
+                  as: "book",
+                  in: "$$book.slot",
+                },
+              },
+            },
+          },
+          {
+            $project: {
+              name: 1,
+              slots: {
+                $setDifference: ["$slots", "$booked"],
+              },
+            },
+          },
+        ])
+        .toArray();
+      res.send(options);
+    });
+
+    app.get("/bookings", verifyJWT, async (req, res) => {
+      const email = req.query.email;
+
+      // console.log("token", req.headers.authorization);
+
+      const decodedEmail = req.decoded.email;
+
+      if (email !== decodedEmail) {
+        return res.status(403).send({ message: "forbidden Access" });
+      }
+
+      const query = { email: email };
+      const bookings = await bookingsCollection.find(query).toArray();
+      res.send(bookings);
     });
 
     app.post("/bookings", async (req, res) => {
@@ -69,6 +153,26 @@ async function run() {
       const result = await bookingsCollection.insertOne(booking);
       res.send(result);
     });
+
+    app.get("/jwt", async (req, res) => {
+      const email = req.query.email;
+      const query = { email: email };
+      const user = await usersCollection.findOne(query);
+      if (user) {
+        const token = jwt.sign({ email }, process.env.ACCESS_TOKEN, {
+          expiresIn: "1d",
+        });
+        return res.send({ accessToken: token });
+      }
+      res.status(403).send({ accessToken: "" });
+    });
+
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const result = await usersCollection.insertOne(user);
+      res.send(result);
+      // console.log(result);
+    });
   } finally {
   }
 }
@@ -77,3 +181,6 @@ run().catch(console.dir);
 app.listen(port, () => {
   console.log(`doctors portal server running on port ${port}`);
 });
+
+//ACCESS_TOKEN=67b16da9e120a3c388709bc5bafe8ca09adde2cdc7dda3a8ee07af07c5af55d5d0faba907614da7ed38a2cf036890a87363ed8c6702f049d9daba607f6444f98
+//
